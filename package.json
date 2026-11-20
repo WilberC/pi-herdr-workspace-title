@@ -1,0 +1,39 @@
+{
+  "name": "pi-herdr-workspace-title",
+  "version": "0.1.0",
+  "description": "Auto-title herdr workspaces from the session's first real request: a short model-redacted title (\"Fix login redirect loop\") applied as display-only metadata, drawn by the herdr-sidecar dock. Adapted from RamonsDka's herdr-workspace-title (MIT).",
+  "license": "MIT",
+  "type": "module",
+  "author": "WilberC",
+  "contributors": [
+    "RamonsDka (original herdr-workspace-title, gs3-sidebar)"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "herdr",
+    "workspace"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WilberC/pi-herdr-workspace-title.git"
+  },
+  "homepage": "https://github.com/WilberC/pi-herdr-workspace-title#readme",
+  "bugs": {
+    "url": "https://github.com/WilberC/pi-herdr-workspace-title/issues"
+  },
+  "files": [
+    "index.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test title.test.mjs"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

@@ -50,13 +50,21 @@ Set `HERDR_TITLE_DEBUG=1` to log to `/tmp/herdr-workspace-title.log`.
 
 ## Install
 
+A Pi package, in the gallery and on npm:
+
+```
+/gentle:install pi-herdr-workspace-title
+```
+
+(or install the npm package into the agent's package root), then `/reload` in
+Pi. From a plain checkout instead:
+
 ```bash
-git clone https://github.com/WilberC/pi-herdr-workspace-title.git
-ln -s "$PWD/pi-herdr-workspace-title/extensions/herdr-workspace-title.ts" \
+ln -s "$PWD/pi-herdr-workspace-title/index.ts" \
       ~/.gentle-shell/agent/extensions/herdr-workspace-title.ts
 ```
 
-(or `~/.pi/agent/extensions/` for a plain Pi install), then `/reload` in Pi.
+(or `~/.pi/agent/extensions/` for a plain Pi install).
 
 ## Requirements
 
@@ -75,7 +83,7 @@ skip rules.
 ## Tests
 
 ```sh
-node --test test/title.test.mjs
+npm test
 ```
 
 Pure functions only (sanitize, heuristic, auto-label): no providers,

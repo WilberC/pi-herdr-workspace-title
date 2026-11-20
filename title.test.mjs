@@ -1,8 +1,8 @@
 // Pure-function tests for the herdr-workspace-title extension. Run with:
-//   node --test test/title.test.mjs
+//   npm test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeTitle, heuristicTitle, autoLabelFor } from "../extensions/herdr-workspace-title.ts";
+import { sanitizeTitle, heuristicTitle, autoLabelFor } from "./index.ts";
 
 test("sanitizeTitle keeps a fitting title", () => {
 	assert.equal(sanitizeTitle("Fix login redirect loop"), "Fix login redirect loop");
