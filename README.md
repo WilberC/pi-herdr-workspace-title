@@ -34,7 +34,7 @@ pi install npm:pi-herdr-workspace-title
 
 Then `/reload` inside the session. It only acts inside herdr
 (`HERDR_ENV=1` and `HERDR_WORKSPACE_ID` set). Requirements and a checkout
-install: [docs/install.md](docs/install.md).
+install: [docs/install.md](https://github.com/WilberC/pi-herdr-workspace-title/blob/main/docs/install.md).
 
 ## Quick reference
 
@@ -50,13 +50,13 @@ install: [docs/install.md](docs/install.md).
 
 | I want to… | Read |
 | --- | --- |
-| Check requirements, or install from a checkout | [docs/install.md](docs/install.md) |
-| Know when a workspace gets a title, and when it is skipped | [docs/how-it-works.md](docs/how-it-works.md) |
-| Run the tests | [docs/development.md](docs/development.md) |
+| Check requirements, or install from a checkout | [docs/install.md](https://github.com/WilberC/pi-herdr-workspace-title/blob/main/docs/install.md) |
+| Know when a workspace gets a title, and when it is skipped | [docs/how-it-works.md](https://github.com/WilberC/pi-herdr-workspace-title/blob/main/docs/how-it-works.md) |
+| Run the tests | [docs/development.md](https://github.com/WilberC/pi-herdr-workspace-title/blob/main/docs/development.md) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Adapted from
+MIT — see [LICENSE](https://github.com/WilberC/pi-herdr-workspace-title/blob/main/LICENSE). Adapted from
 [`herdr-workspace-title.ts`](https://github.com/RamonsDka/gs3-sidebar/blob/main/extensions/herdr-workspace-title.ts)
 by RamonsDka (gs3-sidebar, MIT), with one deliberate change: the title goes
 through display-only metadata, so the workspace label you can rename is never
