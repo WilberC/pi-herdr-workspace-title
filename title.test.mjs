@@ -2,7 +2,7 @@
 //   npm test
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sanitizeTitle, heuristicTitle, autoLabelFor } from "./index.ts";
+import { sanitizeTitle, heuristicTitle, autoLabelFor, herdrSessionFile } from "./index.ts";
 
 test("sanitizeTitle keeps a fitting title", () => {
 	assert.equal(sanitizeTitle("Fix login redirect loop"), "Fix login redirect loop");
@@ -53,4 +53,33 @@ test("autoLabelFor maps cwd to herdr's default label", () => {
 	assert.equal(autoLabelFor(process.env.HOME), "~");
 	assert.equal(autoLabelFor(null), null);
 	assert.equal(autoLabelFor("   "), null);
+});
+
+const HOME = process.env.HOME;
+const legacy = `${HOME}/.config/herdr/session.json`;
+const fake = (present) => (p) => present.has(p);
+
+// herdr persists the active session at sessions/<name>/session.json; the
+// extension must read there before the legacy top-level file — the old path
+// went stale (it froze with an old session's only workspace) and every
+// lookup missed, so no workspace ever got a title.
+test("herdrSessionFile prefers the per-session file when it exists", () => {
+	const perSession = `${HOME}/.config/herdr/sessions/Others/session.json`;
+	assert.equal(
+		herdrSessionFile(undefined, "Others", fake(new Set([perSession]))),
+		perSession,
+	);
+});
+
+test("herdrSessionFile falls back to the legacy file without a per-session one", () => {
+	assert.equal(herdrSessionFile(undefined, "Others", fake(new Set())), legacy);
+	assert.equal(herdrSessionFile(undefined, "  ", fake(new Set())), legacy);
+	assert.equal(herdrSessionFile(undefined, undefined, fake(new Set())), legacy);
+});
+
+test("herdrSessionFile honors the explicit override", () => {
+	assert.equal(
+		herdrSessionFile("/tmp/x.json", "Others", fake(new Set())),
+		"/tmp/x.json",
+	);
 });

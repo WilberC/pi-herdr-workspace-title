@@ -73,10 +73,27 @@ function getHerdrBin(): string {
 }
 
 function getHerdrSessionFile(): string {
-	return (
-		process.env.HERDR_SESSION_FILE ??
-		path.join(os.homedir(), ".config", "herdr", "session.json")
-	);
+	return herdrSessionFile(process.env.HERDR_SESSION_FILE, process.env.HERDR_SESSION, fs.existsSync);
+}
+
+/** Resolves the session file herdr persists the workspace list in: an explicit
+ * HERDR_SESSION_FILE always wins; otherwise the per-session file
+ * sessions/<name>/session.json when the session has one — herdr stores the
+ * active session there (HERDR_SESSION names it) — and the legacy top-level
+ * session.json only as the last fallback. */
+export function herdrSessionFile(
+	override: string | undefined,
+	sessionName: string | undefined,
+	exists: (path: string) => boolean,
+): string {
+	if (override && override.trim().length > 0) return override;
+	if (sessionName && sessionName.trim().length > 0) {
+		const perSession = path.join(
+			os.homedir(), ".config", "herdr", "sessions", sessionName.trim(), "session.json",
+		);
+		if (exists(perSession)) return perSession;
+	}
+	return path.join(os.homedir(), ".config", "herdr", "session.json");
 }
 
 function log(message: string): void {
