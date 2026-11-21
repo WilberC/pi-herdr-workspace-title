@@ -16,13 +16,24 @@ the workspace **label you can rename is never touched**.
 
 ```
 first eligible prompt (≥ 12 chars)
-  → before_agent_start hook receives the exact text
+  → before_agent_start records the exact text; no read, no subprocess, no model call
+run settles (agent_settled; agent_end on older Pi builds)
+  → one read of herdr's session.json decides eligibility
+    (no title token, no custom_name, label still the one derived from the cwd)
   → the session's active model redacts the title (one short isolated call, 15s timeout)
   → fallback: local heuristic (stopwords, 2–5 words, 34-char cap, request language)
-  → herdr workspace report-metadata <ws> --source herdr-utils --token title=<title>
+  → one live `herdr workspace get`, then
+    herdr workspace report-metadata <ws> --source herdr-utils --token title=<title>
 ```
 
-Everything runs in the background and never delays the agent's turn.
+Everything runs in the background and never delays the agent's turn. The
+title work also never competes with the turn: it starts only after the run
+settles, so the nested model call does not share the event loop or the
+credentials with the request the user is waiting for.
+
+herdr's `session.json` grows with the session (workspaces, panes, and the
+pane-history scrollback), so a run reads and parses it once and every check
+in that run reuses the same snapshot; the next prompt reads it fresh.
 
 ## Rules
 
@@ -34,7 +45,8 @@ Everything runs in the background and never delays the agent's turn.
   from the workspace cwd, skips the workspace. When in doubt, it does not
   touch anything.
 - The immediate re-check before the async apply closes the race with another
-  hook or a manual rename.
+  hook or a manual rename; it costs one live `herdr workspace get` per run and
+  no second read of the session file.
 - A failed apply retries on the next eligible prompt.
 
 ## Commands
@@ -86,8 +98,11 @@ skip rules.
 npm test
 ```
 
-Pure functions only (sanitize, heuristic, auto-label): no providers,
-sessions, or herdr invocations.
+Unit tests for the pure functions (sanitize, heuristic, auto-label,
+session-file resolution) plus hook-level tests that drive
+`before_agent_start` and `agent_settled` against a stub `herdr` binary and a
+stub model registry in a temp directory: no network, no real herdr, and the
+temp directory is removed afterwards.
 
 ## License
 

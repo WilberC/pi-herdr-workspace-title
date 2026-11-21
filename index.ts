@@ -29,8 +29,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
  * - The title is redacted by the session's active model with one short
  *   isolated call; on failure (no auth, timeout, empty reply) a local
  *   heuristic takes over.
- * - Runs in the background and never delays the agent's turn; a failed
- *   apply retries on the next eligible prompt.
+ * - Runs after the run settles (agent_settled) and never delays or competes
+ *   with the agent's turn; a failed apply retries on the next eligible prompt.
+ * - Reads herdr's session.json once per invocation and reuses that snapshot;
+ *   one live `workspace get` per run, right before the apply.
  * - Uses HERDR_BIN_PATH, falling back to `herdr` on PATH.
  */
 
@@ -147,23 +149,50 @@ export function heuristicTitle(prompt: string | null | undefined): string | null
 	return sanitizeTitle(words.slice(0, 4).join(" "));
 }
 
-function readWorkspaceEntry(): { custom_name?: string | null; identity_cwd?: string | null } | null {
-	const wsId = getWorkspaceId();
-	if (!wsId) return null;
-	try {
-		const raw = fs.readFileSync(getHerdrSessionFile(), "utf-8");
-		const data = JSON.parse(raw);
-		if (!Array.isArray(data?.workspaces)) return null;
-		const workspace = data.workspaces.find((entry: any) => entry?.id === wsId);
-		if (!workspace || typeof workspace !== "object") return null;
-		return workspace;
-	} catch {
-		return null;
-	}
+/** One workspace entry of herdr's session.json. */
+export interface WorkspaceEntry {
+	custom_name?: string | null;
+	identity_cwd?: string | null;
 }
 
-function readIdentityCwd(): string | null {
-	const entry = readWorkspaceEntry();
+export interface SessionEntryReaderDeps {
+	workspaceId: string | undefined;
+	/** Resolved lazily, so one invocation pays for the path lookup once. */
+	sessionFile: () => string;
+	readFile: (file: string) => string;
+}
+
+/**
+ * One invocation's view of herdr's session.json.
+ *
+ * The file grows with the session (workspaces, panes, and
+ * `experimental.pane_history` scrollback), so it is read and parsed at most
+ * once per invocation and every consumer — the eligibility pre-check, the
+ * auto-label comparison and the skip log — shares that snapshot. It is never
+ * cached across prompts: the next prompt gets its own fresh read.
+ */
+export function createSessionEntryReader(deps: SessionEntryReaderDeps): () => WorkspaceEntry | null {
+	let loaded = false;
+	let entry: WorkspaceEntry | null = null;
+	return () => {
+		if (loaded) return entry;
+		loaded = true;
+		const wsId = deps.workspaceId;
+		if (!wsId) return entry;
+		try {
+			const data = JSON.parse(deps.readFile(deps.sessionFile()));
+			if (!Array.isArray(data?.workspaces)) return entry;
+			const workspace = data.workspaces.find((candidate: any) => candidate?.id === wsId);
+			if (workspace && typeof workspace === "object") entry = workspace;
+		} catch {
+			entry = null;
+		}
+		return entry;
+	};
+}
+
+/** The workspace cwd herdr derives its label from, trimmed, or null. */
+export function identityCwdOf(entry: WorkspaceEntry | null | undefined): string | null {
 	const cwd = entry?.identity_cwd;
 	return typeof cwd === "string" && cwd.trim().length > 0 ? cwd.trim() : null;
 }
@@ -198,47 +227,75 @@ function workspaceJSON(wsId: string, timeoutMs: number): Promise<any | null> {
 	});
 }
 
+export interface AutoTitleContext {
+	workspaceId: string | undefined;
+	/** The invocation's session.json snapshot (see createSessionEntryReader). */
+	sessionEntry: () => WorkspaceEntry | null;
+	probeWorkspace: (wsId: string, timeoutMs: number) => Promise<any | null>;
+	log: (message: string) => void;
+}
+
 /**
- * Decide whether the workspace is still free for automatic titling.
+ * The cheap half of the eligibility check: no subprocess and no second read of
+ * herdr's session file, only the invocation's snapshot.
  *
  * Conservative on purpose: when in doubt, do not touch (fail closed) —
  * overwriting a hand-set name is far worse than leaving a workspace untitled.
- * Fails closed when the session file cannot be read, the cwd is unknown, or
- * the herdr query fails or answers malformed/empty JSON.
+ * Fails closed when the session file cannot be read or the cwd is unknown.
  */
-export async function shouldAutoTitle(): Promise<boolean> {
-	const wsId = getWorkspaceId();
+export function canAutoTitleFromSession(ctx: AutoTitleContext): boolean {
+	const wsId = ctx.workspaceId;
 	if (!wsId) return false;
 
-	const entry = readWorkspaceEntry();
+	const entry = ctx.sessionEntry();
 	if (!entry) {
-		log(`skip: session file unreadable or workspace ${wsId} not found in session`);
+		ctx.log(`skip: session file unreadable or workspace ${wsId} not found in session`);
 		return false;
 	}
 	if (typeof entry.custom_name === "string" && entry.custom_name.trim().length > 0) {
-		log(`skip: ${wsId} carries a custom_name in the session`);
+		ctx.log(`skip: ${wsId} carries a custom_name in the session`);
 		return false;
 	}
 
-	const live = await workspaceJSON(wsId, 2000);
+	const identityCwd = identityCwdOf(entry);
+	if (!autoLabelFor(identityCwd)) {
+		ctx.log(`skip: cannot determine auto-label for cwd "${identityCwd}"`);
+		return false;
+	}
+
+	return true;
+}
+
+/**
+ * The live half: one `herdr workspace get`, run immediately before the apply so
+ * a name the user set while the title was being redacted still wins. It reuses
+ * the invocation's session snapshot instead of reading the file again, and it
+ * is the only subprocess query of a run.
+ */
+export async function canAutoTitleNow(ctx: AutoTitleContext): Promise<boolean> {
+	const wsId = ctx.workspaceId;
+	if (!wsId) return false;
+
+	const live = await ctx.probeWorkspace(wsId, 2000);
 	if (!live) {
-		log(`skip: workspace get failed or malformed for ${wsId}`);
+		ctx.log(`skip: workspace get failed or malformed for ${wsId}`);
 		return false;
 	}
 	const tokens = live.tokens ?? {};
 	if (typeof tokens.title === "string" && tokens.title.trim().length > 0) {
-		log(`skip: ${wsId} already carries the title token`);
+		ctx.log(`skip: ${wsId} already carries the title token`);
 		return false;
 	}
 
 	const label = typeof live.label === "string" ? live.label.trim() : "";
-	const autoLabel = autoLabelFor(readIdentityCwd());
+	const identityCwd = identityCwdOf(ctx.sessionEntry());
+	const autoLabel = autoLabelFor(identityCwd);
 	if (!autoLabel) {
-		log(`skip: cannot determine auto-label for cwd "${readIdentityCwd()}"`);
+		ctx.log(`skip: cannot determine auto-label for cwd "${identityCwd}"`);
 		return false;
 	}
 	if (label !== autoLabel) {
-		log(`skip: ${wsId} carries its own label "${label}"`);
+		ctx.log(`skip: ${wsId} carries its own label "${label}"`);
 		return false;
 	}
 
@@ -362,57 +419,172 @@ function registerCommand(pi: ExtensionAPI): void {
 	}
 }
 
-let lastTask: Promise<void> | null = null;
+export interface TitleControllerDeps {
+	workspaceId: string | undefined;
+	sessionFile: () => string;
+	readFile: (file: string) => string;
+	probeWorkspace: (wsId: string, timeoutMs: number) => Promise<any | null>;
+	generateTitle: (prompt: string, ctx: any) => Promise<string | null>;
+	applyTitle: (title: string) => Promise<boolean>;
+	heuristic: (prompt: string | null | undefined) => string | null;
+	minPromptChars: number;
+	log: (message: string) => void;
+}
+
+export interface TitleController {
+	/** Record the prompt of the run that is starting. Does no I/O. */
+	beforeAgentStart(prompt: string | null | undefined, ctx: unknown): void;
+	/** Start the recorded prompt's title work; call once the run settled. */
+	agentSettled(ctx?: unknown): Promise<void> | null;
+	getLastTask(): Promise<void> | null;
+}
+
+/**
+ * The title pipeline, split from the event wiring so its two hot-path
+ * guarantees are testable: no work while the run is starting (F5) and one
+ * session.json read per invocation (F4).
+ */
+export function createTitleController(deps: TitleControllerDeps): TitleController {
+	let handled = false;
+	let inFlight = false;
+	let pending: { prompt: string; ctx: unknown } | null = null;
+	let lastTask: Promise<void> | null = null;
+
+	async function run(prompt: string, ctx: unknown): Promise<void> {
+		const autoCtx: AutoTitleContext = {
+			workspaceId: deps.workspaceId,
+			sessionEntry: createSessionEntryReader({
+				workspaceId: deps.workspaceId,
+				sessionFile: deps.sessionFile,
+				readFile: deps.readFile,
+			}),
+			probeWorkspace: deps.probeWorkspace,
+			log: deps.log,
+		};
+
+		if (!canAutoTitleFromSession(autoCtx)) return;
+
+		let title = await deps.generateTitle(prompt, ctx);
+		if (!title) title = deps.heuristic(prompt);
+		if (!title) {
+			// No title does not burn the one chance: the next eligible prompt
+			// retries.
+			handled = false;
+			return;
+		}
+
+		// The single live query of the run, immediately before the async
+		// apply: another hook or the user may have named the workspace in
+		// between.
+		if (!(await canAutoTitleNow(autoCtx))) return;
+
+		if (!(await deps.applyTitle(title))) {
+			// A failed apply retries on the next eligible prompt.
+			handled = false;
+		}
+	}
+
+	function start(prompt: string, ctx: unknown): Promise<void> {
+		if (inFlight) return Promise.resolve();
+		inFlight = true;
+		handled = true;
+		const task = run(prompt, ctx).finally(() => {
+			inFlight = false;
+		});
+		lastTask = task;
+		return task;
+	}
+
+	return {
+		beforeAgentStart(prompt, ctx) {
+			// A prompt whose run never settled (no settle event, or a hard
+			// abort) runs its title here instead of stacking a second pending
+			// prompt, so the first eligible prompt still wins.
+			if (pending) {
+				const stale = pending;
+				pending = null;
+				void start(stale.prompt, stale.ctx);
+				return;
+			}
+			if (handled || inFlight) return;
+			const text = typeof prompt === "string" ? prompt.trim() : "";
+			if (text.length < deps.minPromptChars) return;
+			pending = { prompt: text, ctx };
+		},
+		agentSettled(ctx) {
+			if (!pending) return null;
+			const { prompt, ctx: queued } = pending;
+			pending = null;
+			// Prefer the settled run's context when it carries a model, so the
+			// redaction uses the model that is actually active now.
+			return start(prompt, hasModel(ctx) ? ctx : queued);
+		},
+		getLastTask() {
+			return lastTask;
+		},
+	};
+}
+
+function hasModel(ctx: unknown): boolean {
+	const model = (ctx as any)?.model;
+	return typeof model === "object" && model !== null;
+}
+
+let activeController: TitleController | null = null;
 
 export function getLastTask(): Promise<void> | null {
-	return lastTask;
+	return activeController?.getLastTask() ?? null;
+}
+
+/** Registers a notification-only run boundary; false when the build lacks it. */
+function onRunSettled(
+	pi: ExtensionAPI,
+	event: "agent_settled" | "agent_end",
+	handler: (event: any, ctx: ExtensionContext) => void,
+): boolean {
+	try {
+		pi.on(event, handler);
+		return true;
+	} catch (error) {
+		log(`${event} unavailable: ${error instanceof Error ? error.message : String(error)}`);
+		return false;
+	}
 }
 
 export default function initHerdrWorkspaceTitle(pi: ExtensionAPI): void {
 	registerCommand(pi);
 	if (!enabled() || !readToggle()) return;
 
-	let handled = false;
-	let inFlight = false;
+	const controller = createTitleController({
+		workspaceId: getWorkspaceId(),
+		sessionFile: getHerdrSessionFile,
+		readFile: (file) => fs.readFileSync(file, "utf-8"),
+		probeWorkspace: workspaceJSON,
+		generateTitle,
+		applyTitle,
+		heuristic: heuristicTitle,
+		minPromptChars: MIN_PROMPT_CHARS,
+		log,
+	});
+	activeController = controller;
 
 	pi.on("before_agent_start", (event: any, ctx: ExtensionContext) => {
 		if (event?.messageType !== "user") return;
-		if (handled || inFlight) return;
-
-		const prompt = typeof event.prompt === "string" ? event.prompt.trim() : "";
-		if (prompt.length < MIN_PROMPT_CHARS) return;
-
-		handled = true;
-		inFlight = true;
-		const task = (async () => {
-			try {
-				if (!(await shouldAutoTitle())) return;
-
-				let title = await generateTitle(prompt, ctx);
-				if (!title) {
-					title = heuristicTitle(prompt);
-				}
-				if (!title) {
-					// No title does not burn the one chance: the next eligible
-					// prompt retries.
-					handled = false;
-					return;
-				}
-
-				// Re-check immediately before the async apply: another hook or
-				// the user may have named the workspace in between.
-				if (!(await shouldAutoTitle())) return;
-
-				const ok = await applyTitle(title);
-				if (!ok) {
-					// A failed apply retries on the next eligible prompt.
-					handled = false;
-				}
-			} finally {
-				inFlight = false;
-			}
-		})();
-		lastTask = task;
-		void task;
+		// Record only: the title work starts once the run settles, so the
+		// nested model call never competes with the first real turn for the
+		// event loop or the session's credentials.
+		controller.beforeAgentStart(event.prompt, ctx);
 	});
+
+	const settled = (_event: any, ctx: ExtensionContext) => {
+		void controller.agentSettled(ctx);
+	};
+	// `agent_settled` is the run's final, non-reentrant boundary; `agent_end`
+	// only brackets one low-level run, so it is the fallback for builds without
+	// it. Without either, the next prompt flushes the pending title.
+	if (!onRunSettled(pi, "agent_settled", settled)) {
+		if (!onRunSettled(pi, "agent_end", settled)) {
+			log("no run settle event: the next prompt flushes the pending title");
+		}
+	}
 }
