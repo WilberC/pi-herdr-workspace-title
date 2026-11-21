@@ -1,6 +1,6 @@
 {
   "name": "pi-herdr-workspace-title",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Auto-title herdr workspaces from the session's first real request: a short model-redacted title (\"Fix login redirect loop\") applied as display-only metadata, drawn by the herdr-sidecar dock. Adapted from RamonsDka's herdr-workspace-title (MIT).",
   "license": "MIT",
   "type": "module",
