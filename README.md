@@ -1,111 +1,64 @@
 # pi-herdr-workspace-title
 
-A [Pi](https://github.com/earendil-works/pi-coding-agent) extension that names
-your [herdr](https://herdr.dev) workspace once per session, with a short title
-redacted from your first real request — «Fix login redirect loop». The
-herdr-sidecar dock draws it under the agent name, and herdr's own tokens can
-read it.
+**Your [herdr](https://herdr.dev) workspaces name themselves from your first
+request.** A [Pi](https://pi.dev) and
+[Gentle Shell](https://github.com/Gentleman-Programming/gentle-shell) extension.
 
-Adapted from
-[`herdr-workspace-title.ts`](https://github.com/RamonsDka/gs3-sidebar/blob/main/extensions/herdr-workspace-title.ts)
-by RamonsDka (gs3-sidebar, MIT), with one deliberate change: the title is
-applied through `herdr workspace report-metadata` — a display-only token — so
-the workspace **label you can rename is never touched**.
+## What it does
 
-## How it works
+Once per session, after the first real request settles, the session's model
+redacts a short title from it — «Fix login redirect loop» — and the extension
+applies it to the current herdr workspace as display-only metadata
+(`herdr workspace report-metadata … --token title=<title>`). The
+[herdr-sidecar](https://github.com/WilberC/herdr-sidecar) dock draws it under
+the agent name, and herdr's own tokens can read it.
 
-```
-first eligible prompt (≥ 12 chars)
-  → before_agent_start records the exact text; no read, no subprocess, no model call
-run settles (agent_settled; agent_end on older Pi builds)
-  → one read of herdr's session.json decides eligibility
-    (no title token, no custom_name, label still the one derived from the cwd)
-  → the session's active model redacts the title (one short isolated call, 15s timeout)
-  → fallback: local heuristic (stopwords, 2–5 words, 34-char cap, request language)
-  → one live `herdr workspace get`, then
-    herdr workspace report-metadata <ws> --source herdr-utils --token title=<title>
-```
+## What it solves
 
-Everything runs in the background and never delays the agent's turn. The
-title work also never competes with the turn: it starts only after the run
-settles, so the nested model call does not share the event loop or the
-credentials with the request the user is waiting for.
-
-herdr's `session.json` grows with the session (workspaces, panes, and the
-pane-history scrollback), so a run reads and parses it once and every check
-in that run reuses the same snapshot; the next prompt reads it fresh.
-
-## Rules
-
-- Only acts inside herdr (`HERDR_ENV=1` + `HERDR_WORKSPACE_ID`).
-- One title per workspace: a workspace that already carries the `title` token
-  is skipped.
-- **A name you set by hand always wins** (fail closed): a `custom_name` in
-  herdr's session, or a live label that differs from the one herdr derives
-  from the workspace cwd, skips the workspace. When in doubt, it does not
-  touch anything.
-- The immediate re-check before the async apply closes the race with another
-  hook or a manual rename; it costs one live `herdr workspace get` per run and
-  no second read of the session file.
-- A failed apply retries on the next eligible prompt.
-
-## Commands
-
-| Command | Effect |
-| --- | --- |
-| `/workspace-title on` | Enable (persisted) |
-| `/workspace-title off` | Disable new titling (persisted; never clears an applied title) |
-| `/workspace-title status` | Toggle, env and workspace state |
-
-`HERDR_TITLE_DISABLE=1` is the hard switch and always wins over the toggle.
-Set `HERDR_TITLE_DEBUG=1` to log to `/tmp/herdr-workspace-title.log`.
+- **A row of workspaces all called after their folder.** Each one gets a title
+  that says what you are doing in it.
+- **Naming is a chore you forget.** It happens in the background, after the
+  turn, without delaying the agent.
+- **Automation must not overwrite you.** The workspace label is never touched:
+  a name you set by hand always wins, and when in doubt it does nothing.
 
 ## Install
 
-A Pi package, in the gallery and on npm:
-
-```
-/gentle:install pi-herdr-workspace-title
-```
-
-(or install the npm package into the agent's package root), then `/reload` in
-Pi. From a plain checkout instead:
-
 ```bash
-ln -s "$PWD/pi-herdr-workspace-title/index.ts" \
-      ~/.gentle-shell/agent/extensions/herdr-workspace-title.ts
+# Gentle Shell
+gentle-shell install npm:pi-herdr-workspace-title
+
+# Pi
+pi install npm:pi-herdr-workspace-title
 ```
 
-(or `~/.pi/agent/extensions/` for a plain Pi install).
+Then `/reload` inside the session. It only acts inside herdr
+(`HERDR_ENV=1` and `HERDR_WORKSPACE_ID` set). Requirements and a checkout
+install: [docs/install.md](docs/install.md).
 
-## Requirements
+## Quick reference
 
-- Pi ≥ 1.5.0 with the extensions API (`before_agent_start`,
-  `modelRegistry.complete`). No TypeScript compiler needed: Pi loads the
-  `.ts` with strip-types.
-- herdr with `workspace report-metadata` (0.9.x; present since the metadata
-  API landed — the extension fails safe and retries on older builds).
-- A authenticated model session in Pi for the redaction; without it the
-  heuristic takes over (no auth needed).
+| Command | Effect |
+| --- | --- |
+| `/workspace-title on` | enable (persisted) |
+| `/workspace-title off` | disable new titling (persisted; never clears an applied title) |
+| `/workspace-title status` | toggle, env and workspace state |
 
-No dependency on `hu` / herdr-utils: this extension and `hu title set` are
-two independent entrances to the same display-only token, with the same
-skip rules.
+`HERDR_TITLE_DISABLE=1` is the hard switch and always wins over the toggle.
 
-## Tests
+## Documentation
 
-```sh
-npm test
-```
-
-Unit tests for the pure functions (sanitize, heuristic, auto-label,
-session-file resolution) plus hook-level tests that drive
-`before_agent_start` and `agent_settled` against a stub `herdr` binary and a
-stub model registry in a temp directory: no network, no real herdr, and the
-temp directory is removed afterwards.
+| I want to… | Read |
+| --- | --- |
+| Check requirements, or install from a checkout | [docs/install.md](docs/install.md) |
+| Know when a workspace gets a title, and when it is skipped | [docs/how-it-works.md](docs/how-it-works.md) |
+| Run the tests | [docs/development.md](docs/development.md) |
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Framing core adapted from RamonsDka's
-gs3-sidebar extension (MIT); the report-metadata application, the persistent
-toggle and the package are this repo's work.
+MIT — see [LICENSE](LICENSE). Adapted from
+[`herdr-workspace-title.ts`](https://github.com/RamonsDka/gs3-sidebar/blob/main/extensions/herdr-workspace-title.ts)
+by RamonsDka (gs3-sidebar, MIT), with one deliberate change: the title goes
+through display-only metadata, so the workspace label you can rename is never
+touched. The report-metadata application, the persistent toggle and the package
+are this repo's work.
